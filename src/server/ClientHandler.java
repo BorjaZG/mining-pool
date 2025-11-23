@@ -12,7 +12,7 @@ public class ClientHandler extends Thread {
     private Socket socket;
     private PrintWriter out;
     private BufferedReader in;
-    private String currentPayload; // Para validar la solución si este cliente la envía
+    private String currentPayload;
 
     public ClientHandler(Socket socket) {
         this.socket = socket;
@@ -26,66 +26,64 @@ public class ClientHandler extends Thread {
 
             String inputLine;
             while ((inputLine = in.readLine()) != null) {
-                // Procesar mensajes del cliente
+
                 if (inputLine.startsWith(Protocol.CMD_CONNECT)) {
-                    // Fuente [33]: "ack - X total clients"
-                    int count = MiningServer.clients.size();
+                    // Fuente [33]: Responder con ACK y total de clientes
+                    int count = MiningGuiServer.clients.size();
                     sendMessage(Protocol.RESP_ACK + " " + count + " total clients");
-                    System.out.println("Cliente registrado. Total: " + count);
+
+                    // Log en la ventana del servidor
+                    MiningGuiServer.log("Cliente registrado (Hilo ID: " + this.getId() + ")");
+                    MiningGuiServer.updateClientCount();
 
                 } else if (inputLine.startsWith(Protocol.CMD_SOL)) {
-                    // Fuente [41]: "client1: sol 36"
+                    // Fuente [63]: Recibir solución
                     handleSolution(inputLine);
                 }
             }
         } catch (IOException e) {
-            System.err.println("Cliente desconectado abruptamente.");
+            // Cliente cerrado
         } finally {
             disconnect();
         }
     }
 
-    // Envía un mensaje a este cliente específico
     public void sendMessage(String msg) {
         out.println(msg);
     }
 
-    // Guarda el payload actual para poder validar luego
     public void setCurrentPayload(String payload) {
         this.currentPayload = payload;
     }
 
     private void handleSolution(String input) {
-        // Formato esperado: "sol <numero>"
         try {
             String[] parts = input.split(" ");
             String saltStr = parts[1];
 
-            // VALIDACIÓN DE LA SOLUCIÓN (Obligatorio)
-            // Fuente [64]: "El servidor deberá validar la solución aportada"
+            // Fuente [64]: El servidor valida la solución
             if (currentPayload != null) {
                 String toCheck = currentPayload + saltStr;
                 String hash = HashUtils.getSha256(toCheck);
 
-                // Comprobamos si realmente empieza por "00000" (o lo que definas)
-                // Para pruebas rápidas, usa 4 o 5 ceros. El PDF menciona 2 ceros en la pág 3,
-                // pero eso es muy fácil, mejor probar con 4 o 5.
+                // IMPORTANTE: Dificultad 4 ceros para que coincida con el cliente
                 if (HashUtils.checkHash(hash, 4)) {
-                    MiningServer.notifySolutionFound("Cliente " + this.getId());
+                    MiningGuiServer.notifySolutionFound("Cliente " + this.getId());
                 } else {
-                    System.out.println("Solución incorrecta recibida del cliente " + this.getId());
+                    MiningGuiServer.log("ADVERTENCIA: Cliente " + this.getId() + " envió solución INCORRECTA.");
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error procesando solución: " + e.getMessage());
+            MiningGuiServer.log("Error procesando solución: " + e.getMessage());
         }
     }
 
     private void disconnect() {
         try {
-            MiningServer.clients.remove(this);
+            MiningGuiServer.clients.remove(this);
             socket.close();
-            System.out.println("Cliente desconectado. Restantes: " + MiningServer.clients.size());
+            MiningGuiServer.log("Cliente desconectado.");
+            MiningGuiServer.updateClientCount();
         } catch (IOException e) {
             e.printStackTrace();
         }
