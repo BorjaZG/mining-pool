@@ -1,8 +1,7 @@
 package server;
 
 import common.Protocol;
-import common.TransactionRecord;
-import java.util.Random;
+import java.util.List;
 
 public class BlockManager extends Thread {
 
@@ -10,60 +9,57 @@ public class BlockManager extends Thread {
     public void run() {
         while (true) {
             try {
-                // Simulación del tiempo de bloque (20 segundos para pruebas)
-                // Fuente [25]: Generar nuevo bloque periódicamente
-                Thread.sleep(20000);
+                // Comprobamos cada 2 segundos
+                Thread.sleep(2000);
+
+                // CONDICIÓN DE ACTIVACIÓN: Tener 3 o más transacciones pendientes
+                if (MiningGuiServer.pendingTransactions.size() < 3) {
+                    continue; // Seguimos esperando
+                }
 
                 if (MiningGuiServer.clients.isEmpty()) {
-                    MiningGuiServer.log("Esperando clientes para iniciar minado...");
+                    MiningGuiServer.log("Transacciones listas, pero faltan mineros...");
                     continue;
                 }
 
-                MiningGuiServer.log("\n--- GENERANDO NUEVO BLOQUE ---");
+                MiningGuiServer.log("\n--- ¡PACK DE 3 TRANSACCIONES COMPLETO! ---");
                 MiningGuiServer.solved = false;
 
-                // 1. Generar transacciones falsas
-                // Fuente [60]: Formato similar a movimiento de cuenta
-                String payload = generarTransacciones();
-                MiningGuiServer.log("Datos del bloque: " + payload);
+                // 1. Construir el bloque con las 3 primeras transacciones
+                StringBuilder payloadBuilder = new StringBuilder();
 
-                // 2. Repartir rangos entre los clientes
-                // Fuente [37]: Enviar new_request con rangos
+                // Sacamos 3 de la lista (FIFO)
+                for (int i = 0; i < 3; i++) {
+                    String tx = MiningGuiServer.pendingTransactions.remove(0);
+                    // Formato: mv|datos;
+                    payloadBuilder.append("mv|").append(tx).append(";");
+                }
+
+                String payload = payloadBuilder.toString();
+                MiningGuiServer.log("Generando bloque: " + payload);
+
+                // 2. Repartir trabajo
                 int totalClients = MiningGuiServer.clients.size();
-                int rangeSize = 1000000; // 1 millón por cliente
+                int rangeSize = 1000000;
                 int start = 0;
 
                 for (ClientHandler client : MiningGuiServer.clients) {
                     int end = start + rangeSize;
-
                     client.setCurrentPayload(payload);
 
                     String msg = Protocol.RESP_NEW_REQUEST + " " + start + "-" + end + " " + payload;
                     client.sendMessage(msg);
-
                     start = end + 1;
                 }
 
-                MiningGuiServer.log("Trabajo distribuido a " + totalClients + " clientes.");
+                MiningGuiServer.log("¡Trabajo enviado a los mineros!");
+
+                // Limpiar texto de estado
+                MiningGuiServer.updateClientCount();
 
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         }
-    }
-
-    private String generarTransacciones() {
-        Random rand = new Random();
-        StringBuilder sb = new StringBuilder();
-        // Generar 3 transacciones aleatorias
-        for (int i = 0; i < 3; i++) {
-            String origen = "u" + rand.nextInt(50);
-            String destino = "u" + rand.nextInt(50);
-            int cantidad = rand.nextInt(500);
-
-            TransactionRecord tx = new TransactionRecord(origen, destino, cantidad);
-            sb.append(tx.toString()).append(";");
-        }
-        return sb.toString();
     }
 }

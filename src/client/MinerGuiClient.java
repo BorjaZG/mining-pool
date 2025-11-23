@@ -10,43 +10,70 @@ import java.io.PrintWriter;
 import java.net.Socket;
 
 public class MinerGuiClient extends JFrame {
-    // Componentes de la UI
+    // Componentes UI
     private JTextArea logArea;
     private JProgressBar progressBar;
     private JButton connectButton;
     private JLabel statusLabel;
 
-    // Variables de red
+    // --- NUEVOS COMPONENTES PARA TRANSACCIONES ---
+    private JTextField destField;
+    private JTextField amountField;
+    // ---------------------------------------------
+
+    // Red y Worker
     private Socket socket;
     private PrintWriter out;
     private BufferedReader in;
     private MiningWorker currentWorker;
 
     public static void main(String[] args) {
-        // Iniciar la ventana en el hilo de eventos de Swing
         SwingUtilities.invokeLater(() -> new MinerGuiClient().setVisible(true));
     }
 
     public MinerGuiClient() {
-        // Configuración de la Ventana
         setTitle("Miner Client - Mining Pool");
-        setSize(500, 400);
+        setSize(500, 500); // Un poco más alta para que quepan los campos
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
-        // 1. Panel Superior (Botón Conectar)
-        JPanel topPanel = new JPanel();
+        // --- PANEL SUPERIOR (Conexión + Enviar Dinero) ---
+        JPanel topPanel = new JPanel(new GridLayout(2, 1));
+
+        // 1. Panel Conexión
+        JPanel connectPanel = new JPanel();
         connectButton = new JButton("Conectar al Servidor");
         connectButton.addActionListener(e -> connectToServer());
-        topPanel.add(connectButton);
-        add(topPanel, BorderLayout.NORTH);
+        connectPanel.add(connectButton);
+        topPanel.add(connectPanel);
 
-        // 2. Panel Central (Logs)
+        // 2. Panel Transacciones (NUEVO)
+        JPanel txPanel = new JPanel();
+        txPanel.setBorder(BorderFactory.createTitledBorder("Enviar Operación"));
+
+        destField = new JTextField(8);
+        amountField = new JTextField(5);
+        JButton sendButton = new JButton("Enviar");
+
+        txPanel.add(new JLabel("Destino:"));
+        txPanel.add(destField);
+        txPanel.add(new JLabel("€:"));
+        txPanel.add(amountField);
+        txPanel.add(sendButton);
+
+        // Acción del botón
+        sendButton.addActionListener(e -> sendTransaction());
+
+        topPanel.add(txPanel);
+        add(topPanel, BorderLayout.NORTH);
+        // -------------------------------------------------
+
+        // Panel Central (Logs)
         logArea = new JTextArea();
         logArea.setEditable(false);
         add(new JScrollPane(logArea), BorderLayout.CENTER);
 
-        // 3. Panel Inferior (Barra de Progreso y Estado)
+        // Panel Inferior (Progreso)
         JPanel bottomPanel = new JPanel(new BorderLayout());
         progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
@@ -57,34 +84,52 @@ public class MinerGuiClient extends JFrame {
         add(bottomPanel, BorderLayout.SOUTH);
     }
 
+    // --- NUEVO MÉTODO DE ENVÍO ---
+    private void sendTransaction() {
+        if (out != null) {
+            String dest = destField.getText();
+            String cant = amountField.getText();
+
+            if (!dest.isEmpty() && !cant.isEmpty()) {
+                // Envía: tx DESTINO CANTIDAD
+                out.println(Protocol.CMD_SEND_TX + " " + dest + " " + cant);
+                log("-> Enviada operación a " + dest + " (" + cant + "€)");
+
+                // Limpiar campos
+                destField.setText("");
+                amountField.setText("");
+            } else {
+                JOptionPane.showMessageDialog(this, "Rellena destino y cantidad");
+            }
+        } else {
+            JOptionPane.showMessageDialog(this, "Primero conéctate al servidor");
+        }
+    }
+    // -----------------------------
+
     private void connectToServer() {
         new Thread(() -> {
             try {
-                log("Conectando a " + Protocol.DEFAULT_HOST + "...");
+                log("Conectando...");
                 socket = new Socket(Protocol.DEFAULT_HOST, Protocol.DEFAULT_PORT);
                 out = new PrintWriter(socket.getOutputStream(), true);
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-                // Enviar comando inicial
                 out.println(Protocol.CMD_CONNECT);
 
                 SwingUtilities.invokeLater(() -> {
                     connectButton.setEnabled(false);
-                    statusLabel.setText(" Estado: Conectado y esperando trabajo...");
+                    statusLabel.setText(" Estado: Conectado. Esperando trabajo...");
                 });
 
-                // Bucle de escucha (Listener)
                 String serverMsg;
                 while ((serverMsg = in.readLine()) != null) {
                     processMessage(serverMsg);
                 }
 
             } catch (IOException e) {
-                log("Error de conexión: " + e.getMessage());
-                SwingUtilities.invokeLater(() -> {
-                    connectButton.setEnabled(true);
-                    statusLabel.setText(" Estado: Error de conexión");
-                });
+                log("Error: " + e.getMessage());
+                SwingUtilities.invokeLater(() -> connectButton.setEnabled(true));
             }
         }).start();
     }
@@ -95,33 +140,33 @@ public class MinerGuiClient extends JFrame {
         if (msg.startsWith(Protocol.RESP_NEW_REQUEST)) {
             stopWorker();
             try {
-                // Parsear mensaje: new_request 0-100000 mv|...
-                String[] parts = msg.split(" ");
+                // CORRECCIÓN: Usamos límite 3 para no romper el payload si tiene espacios
+                String[] parts = msg.split(" ", 3);
+
                 String[] range = parts[1].split("-");
-                String payload = parts[2];
+                String payload = parts[2]; // Ahora cogerá "mv|...pepe 50;..." entero
+
                 long start = Long.parseLong(range[0]);
                 long end = Long.parseLong(range[1]);
 
-                log(">>> ¡NUEVO TRABAJO! Rango: " + start + " - " + end);
+                log(">>> ¡NUEVO BLOQUE! Minando...");
                 out.println(Protocol.RESP_ACK);
 
-                // Actualizar UI
                 SwingUtilities.invokeLater(() -> {
                     progressBar.setValue(0);
                     statusLabel.setText(" Estado: MINANDO (" + start + "-" + end + ")");
                 });
 
-                // Iniciar Worker
                 currentWorker = new MiningWorker(start, end, payload, this);
                 currentWorker.start();
 
             } catch (Exception e) {
-                log("Error procesando trabajo: " + e.getMessage());
+                log("Error parsing request: " + e.getMessage());
             }
         }
         else if (msg.startsWith(Protocol.RESP_END)) {
             stopWorker();
-            log(">>> FIN. Bloque resuelto por otro.");
+            log(">>> FIN DEL BLOQUE.");
             SwingUtilities.invokeLater(() -> {
                 progressBar.setValue(0);
                 statusLabel.setText(" Estado: Esperando siguiente bloque...");
@@ -135,7 +180,6 @@ public class MinerGuiClient extends JFrame {
         }
     }
 
-    // Método llamado por el Worker para actualizar la barra
     public void updateProgress(int percent) {
         SwingUtilities.invokeLater(() -> progressBar.setValue(percent));
     }
@@ -143,7 +187,7 @@ public class MinerGuiClient extends JFrame {
     public synchronized void sendSolution(long salt) {
         log("!!! SOLUCIÓN ENCONTRADA: " + salt + " !!!");
         out.println(Protocol.CMD_SOL + " " + salt);
-        SwingUtilities.invokeLater(() -> statusLabel.setText(" Estado: ¡GANADOR! Esperando confirmación..."));
+        SwingUtilities.invokeLater(() -> statusLabel.setText(" Estado: ¡GANADOR!"));
     }
 
     private void log(String text) {

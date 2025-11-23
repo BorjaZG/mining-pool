@@ -14,16 +14,18 @@ public class MiningGuiServer extends JFrame {
     private JTextArea logArea;
     private JLabel statusLabel;
 
-    // Lógica del Servidor (Variables estáticas para acceso global)
-    // Fuente [61]: Lista concurrente de conexiones
+    // Lógica del Servidor
     public static final List<ClientHandler> clients = new CopyOnWriteArrayList<>();
     public static volatile boolean solved = false;
 
-    // Instancia estática para permitir loguear desde otras clases
+    // --- NUEVO: LISTA DE TRANSACCIONES PENDIENTES ---
+    // Usamos CopyOnWriteArrayList para que sea thread-safe
+    public static final List<String> pendingTransactions = new CopyOnWriteArrayList<>();
+
+    // Instancia estática
     private static MiningGuiServer instance;
 
     public static void main(String[] args) {
-        // Iniciar la UI en el hilo de eventos de Swing
         SwingUtilities.invokeLater(() -> {
             new MiningGuiServer().setVisible(true);
         });
@@ -32,26 +34,25 @@ public class MiningGuiServer extends JFrame {
     public MiningGuiServer() {
         instance = this;
 
-        // Configuración de la Ventana
+        // Configuración Ventana
         setTitle("Mining Pool SERVER - Panel de Control");
         setSize(700, 500);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
-        // Panel de Logs (Estilo Consola)
+        // Panel de Logs
         logArea = new JTextArea();
         logArea.setEditable(false);
-        logArea.setBackground(new Color(30, 30, 30)); // Gris oscuro
-        logArea.setForeground(new Color(0, 255, 0));  // Texto verde estilo terminal
+        logArea.setBackground(new Color(30, 30, 30));
+        logArea.setForeground(new Color(0, 255, 0));
         logArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         add(new JScrollPane(logArea), BorderLayout.CENTER);
 
-        // Barra de Estado Inferior
-        statusLabel = new JLabel(" Estado: Iniciando...");
+        // Barra de Estado
+        statusLabel = new JLabel(" Estado: Esperando transacciones...");
         statusLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         add(statusLabel, BorderLayout.SOUTH);
 
-        // Arrancar el servidor en un hilo aparte para no congelar la ventana
         startServerBackground();
     }
 
@@ -60,15 +61,13 @@ public class MiningGuiServer extends JFrame {
             int port = Protocol.DEFAULT_PORT;
             log("--- INICIANDO SERVIDOR EN PUERTO " + port + " ---");
 
-            // Iniciar el gestor de bloques (hilo que genera trabajo)
-            // Fuente [25, 59]: Generar bloques periódicamente
+            // Iniciar gestor de bloques (ahora esperará transacciones)
             new BlockManager().start();
 
             try (ServerSocket serverSocket = new ServerSocket(port)) {
-                SwingUtilities.invokeLater(() -> statusLabel.setText(" Estado: ESCUCHANDO en puerto " + port));
+                log("Servidor listo y escuchando.");
 
                 while (true) {
-                    // Fuente [62]: Gestionar conexiones de manera concurrente
                     Socket clientSocket = serverSocket.accept();
                     log(">>> NUEVA CONEXIÓN: " + clientSocket.getInetAddress());
 
@@ -84,9 +83,20 @@ public class MiningGuiServer extends JFrame {
         }).start();
     }
 
-    // --- MÉTODOS ESTÁTICOS PARA USO DE OTRAS CLASES ---
+    // --- NUEVO MÉTODO: AÑADIR TRANSACCIÓN ---
+    public static void addTransaction(String tx) {
+        pendingTransactions.add(tx);
+        log("--> Nueva transacción recibida: " + tx);
 
-    // Escribir en el área de texto de la ventana
+        // Actualizar UI
+        if (instance != null) {
+            SwingUtilities.invokeLater(() ->
+                    instance.statusLabel.setText(" Acumulando transacciones: " + pendingTransactions.size() + "/3")
+            );
+        }
+    }
+
+    // Métodos de utilidad
     public static void log(String msg) {
         if (instance != null) {
             SwingUtilities.invokeLater(() -> {
@@ -98,29 +108,26 @@ public class MiningGuiServer extends JFrame {
         }
     }
 
-    // Actualizar el contador de clientes en la barra inferior
     public static void updateClientCount() {
-        if (instance != null) {
+        // Solo actualizamos si no estamos en medio de una carga de transacciones
+        if (instance != null && pendingTransactions.isEmpty()) {
             SwingUtilities.invokeLater(() ->
-                    instance.statusLabel.setText(" Estado: ACTIVO | Clientes conectados: " + clients.size())
+                    instance.statusLabel.setText(" Clientes conectados: " + clients.size())
             );
         }
     }
 
-    // Enviar mensaje a todos (Broadcast)
     public static void broadcast(String message) {
         for (ClientHandler client : clients) {
             client.sendMessage(message);
         }
     }
 
-    // Notificar victoria
     public static void notifySolutionFound(String winnerInfo) {
         if (!solved) {
             solved = true;
             log("!!! GANADOR: " + winnerInfo + " !!!");
-            log("--- Bloque cerrado. Notificando fin a todos ---");
-            // Fuente [51, 64]: Validar y finalizar proceso en el resto
+            log("--- Bloque cerrado. Notificando a todos ---");
             broadcast(Protocol.RESP_END);
         }
     }
