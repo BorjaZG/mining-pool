@@ -6,9 +6,9 @@ public class MiningWorker extends Thread {
     private final long startRange;
     private final long endRange;
     private final String payload;
-    private final MinerClient clientCallback; // Para avisar al jefe si encontramos oro
+    private final MinerGuiClient clientCallback; // Cambiamos a la clase GUI
 
-    public MiningWorker(long startRange, long endRange, String payload, MinerClient client) {
+    public MiningWorker(long startRange, long endRange, String payload, MinerGuiClient client) {
         this.startRange = startRange;
         this.endRange = endRange;
         this.payload = payload;
@@ -17,27 +17,33 @@ public class MiningWorker extends Thread {
 
     @Override
     public void run() {
-        // Fuente [52]: "...clientes irán añadiendo un número... contenido + salt"
+        long totalIterations = endRange - startRange;
+        long counter = 0;
+
         for (long salt = startRange; salt <= endRange; salt++) {
 
-            // Comprobar si el servidor nos mandó parar (interrupt)
+            // 1. Comprobar si nos han detenido
             if (Thread.interrupted()) {
-                System.out.println("Worker detenido por orden del servidor.");
                 return;
             }
 
-            // Calcular Hash
+            // 2. Actualizar la barra de progreso (Solo cada 1000 intentos para no congelar la UI)
+            counter++;
+            if (counter % 1000 == 0) {
+                int percent = (int) ((counter * 100) / totalIterations);
+                clientCallback.updateProgress(percent);
+            }
+
+            // 3. Calcular Hash (Igual que antes)
             String toHash = payload + salt;
             String hash = HashUtils.getSha256(toHash);
 
-            // Verificar dificultad (usamos 4 ceros como en el servidor)
-            // Fuente [52]: "empiece por 2 ceros" (nosotros usamos 4 para que cueste un poco más)
+            // Verificar dificultad (usamos 4 ceros para pruebas)
             if (HashUtils.checkHash(hash, 4)) {
-                // ¡ÉXITO!
+                clientCallback.updateProgress(100); // Completar barra
                 clientCallback.sendSolution(salt);
-                return; // Termina el hilo
+                return;
             }
         }
-        System.out.println("Rango terminado sin solución.");
     }
 }
